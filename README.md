@@ -1,9 +1,19 @@
 # Minimum Beacon Placement for Robot Localization
 
+**Sheng Dai** · [bob.dai@mail.utoronto.ca](mailto:bob.dai@mail.utoronto.ca)
+
 A robot moves freely inside a map built from grid cells. Beacons can be mounted anywhere on the walls, and the robot can
 localize itself only when it sees **at least 3 beacons** at the same time; walls block the line of sight. This project
 finds the **smallest set of beacons** that lets the robot localize everywhere in the free space, and studies what drives
 that number.
+
+## Tech stack
+
+- **Languages & tools**: Python, NumPy, Matplotlib, Jupyter
+- **Optimization**: integer linear programming with Google OR-Tools (CP-SAT), greedy set multi-cover, constraint generation (lazy constraints)
+- **Computational geometry**: exact orientation predicates, vectorized line-of-sight tests
+- **Deep learning**: PyTorch (U-Net, masked class-weighted BCE loss, flip augmentation)
+- **Evaluation**: exact sign tests, correlation and least-squares analysis
 
 ## Pipeline
 
@@ -54,3 +64,7 @@ The data and model files are included, so the notebooks run without regenerating
 - Beacon candidates are limited to wall corners and segment midpoints.
 - CP-SAT runs with 8 workers, so re-running can return a different (equally optimal) layout; beacon counts are unaffected.
 - The deep-learning dataset is small (376 training maps), and the model starts to overfit after about 13 epochs.
+
+## License
+
+Released under the [MIT License](LICENSE).

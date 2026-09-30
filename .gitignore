@@ -1,0 +1,7 @@
+# Jupyter autosaves and Python caches
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

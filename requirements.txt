@@ -1,0 +1,7 @@
+# Tested with Python 3.9, numpy 2.0, matplotlib 3.9, ortools 9.15, torch 2.7
+numpy
+matplotlib
+ortools
+torch
+jupyter
+# pulp  # optional: only solvers.lp_bound needs it

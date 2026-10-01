@@ -6,6 +6,8 @@ Model: min sum_j x_j  s.t.  sum_j V_ij x_j >= r_i  for every sample point i, x_j
 where r_i = min(k, total number of candidate beacons visible from that point), so the problem is always feasible.
 """
 
+import time
+
 import numpy as np
 
 __all__ = ["K_DEFAULT", "requirements", "greedy_cover", "ilp_cover",
@@ -87,25 +89,81 @@ def verify(V, chosen, k=K_DEFAULT):
 
 
 def constraint_generation(beacons, cells, W1, W2, P_init, P_check,
-                          k=K_DEFAULT, max_iter=25, verbose=False):
+                          k=K_DEFAULT, max_iter=25, verbose=False, reuse=True, keep=None, scores=None):
     """Constraint generation (see refinement.ipynb): solve on the coarse samples, verify on P_check,
     add the violating points back into the model, and iterate until there are zero violations.
 
     Returns (selected beacon indices, list of iteration records). The solution is verified point by point on P_check.
     It is optimal for P_init and P_check together: the active set is a subset of P_init ∪ P_check (the two grids
     need not overlap), so its optimum is a lower bound that the final, violation-free solution attains.
+    The records also hold the seconds spent on setup, ILP solves, verification and model updates
+    (t_init, t_ilp, t_verify, t_update).
+
+    reuse:  cache each beacon's visibility on P_check across iterations and warm-start every re-solve from the
+            previous solution — same guarantee, much faster on large maps. False runs the plain algorithm.
+    keep:   optional candidate indices to optimize over instead of all of them, e.g. the network's top-K
+            (see scaling.ipynb). Requirements still count ALL candidates: whenever a point cannot reach
+            min(k, #visible candidates) with the kept ones, the missing candidates it sees are added back,
+            best `scores` first. The result is feasible for the full problem and optimal over the final kept set.
     """
     from visibility import visibility_matrix
 
+    M = len(beacons)
+    order = np.argsort(-np.asarray(scores, dtype=float), kind='stable') if scores is not None else np.arange(M)
+    cols = list(range(M)) if keep is None else sorted({int(j) for j in keep})   # candidates in the model
+
+    def vis(idx, P):
+        return visibility_matrix([beacons[j] for j in idx], P, cells, W1, W2)
+
+    def missing(R):
+        """Pruned candidates to add back so that every row of R (full-candidate visibility) is servable"""
+        kept = np.zeros(M, dtype=bool)
+        kept[cols] = True
+        need = np.minimum(k, R.sum(axis=1)) - R[:, kept].sum(axis=1)
+        add = []
+        for i in np.flatnonzero(need > 0):
+            for j in order:
+                if need[i] <= 0:
+                    break
+                if R[i, j] and not kept[j]:
+                    kept[j] = True
+                    add.append(int(j))
+                    need -= R[:, j]
+        return add
+
+    t0 = time.perf_counter()
     A = P_init.copy()
-    V_A = visibility_matrix(beacons, A, cells, W1, W2)
-    log = []
+    V_A = vis(cols, A)
+    if keep is not None:
+        low = np.flatnonzero(V_A.sum(axis=1) < k)
+        add = missing(vis(range(M), A[low])) if len(low) else []
+        if add:
+            V_A = np.hstack([V_A, vis(add, A)])
+            cols += add
+    log, cache, prev = [], {}, None
+    t_init = time.perf_counter() - t0
     for it in range(1, max_iter + 1):
-        sol, status = ilp_cover(V_A, k=k, hint=greedy_cover(V_A, k))
-        V_sel = visibility_matrix([beacons[j] for j in sol], P_check, cells, W1, W2)
+        t0 = time.perf_counter()
+        if reuse and prev:
+            pos = {j: c for c, j in enumerate(cols)}
+            hint = [pos[j] for j in prev]
+        else:
+            hint = greedy_cover(V_A, k)
+        sel, status = ilp_cover(V_A, k=k, hint=hint)
+        sol = [cols[c] for c in sel]
+        t1 = time.perf_counter()
+        if reuse:
+            new = [j for j in sol if j not in cache]
+            if new:
+                cache.update(zip(new, vis(new, P_check).T))
+            V_sel = np.column_stack([cache[j] for j in sol])
+        else:
+            V_sel = vis(sol, P_check)
         bad = np.where(V_sel.sum(axis=1) < k)[0]
+        t2 = time.perf_counter()
         log.append({'iter': it, 'active': len(A), 'n_beacons': len(sol),
-                    'status': status, 'violations': len(bad)})
+                    'status': status, 'violations': len(bad), 'kept': len(cols),
+                    't_init': t_init if it == 1 else 0.0, 't_ilp': t1 - t0, 't_verify': t2 - t1, 't_update': 0.0})
         if verbose:
             print(f'  iter {it}: |A|={len(A):6d}  n={len(sol):3d} ({status})  '
                   f'violations={len(bad)}')
@@ -114,12 +172,18 @@ def constraint_generation(beacons, cells, W1, W2, P_init, P_check,
         # full-candidate visibility of the violating points; if a point cannot see k beacons even
         # with all candidates, its requirement is min(k, total visible), so re-check whether it truly violates
         P_bad = P_check[bad]
-        V_bad = visibility_matrix(beacons, P_bad, cells, W1, W2)
+        V_bad = vis(range(M), P_bad)
         truly = V_sel[bad].sum(axis=1) < np.minimum(k, V_bad.sum(axis=1))
         if not truly.any():
             log[-1]['violations'] = 0
             log[-1]['unsatisfiable'] = int(len(bad))
             return sol, log
-        V_A = np.vstack([V_A, V_bad[truly]])
+        add = missing(V_bad[truly]) if keep is not None else []
+        if add:                                   # pruned candidates the new points need
+            V_A = np.hstack([V_A, vis(add, A)])
+            cols += add
+        V_A = np.vstack([V_A, V_bad[truly][:, cols]])
         A = np.vstack([A, P_bad[truly]])
+        prev = sol
+        log[-1]['t_update'] = time.perf_counter() - t2
     raise RuntimeError('did not converge within max_iter iterations')

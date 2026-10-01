@@ -18,11 +18,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dl_dataset import RH, RW, to_raster_index
+from dl_dataset import to_raster_index
 from solvers import requirements
 from visibility import visibility_matrix
-
-PAD_H, PAD_W = 32, 40          # pad to a size divisible by 8
 
 
 # ------------------------------------------------------------------ model
@@ -39,7 +37,8 @@ class ConvBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    """Small U-Net with 3 downsampling levels; the bottleneck's receptive field covers the whole map (visibility is non-local)"""
+    """Small U-Net with 3 downsampling levels; the bottleneck's receptive field covers a whole 16x12 map (visibility is
+    non-local). Fully convolutional, so it also runs on larger maps."""
 
     def __init__(self, in_ch=2, base=16):
         super().__init__()
@@ -51,16 +50,17 @@ class UNet(nn.Module):
         self.up1, self.dec1 = nn.ConvTranspose2d(2 * b, b, 2, stride=2), ConvBlock(2 * b, b)
         self.head = nn.Conv2d(b, 1, 1)
 
-    def forward(self, x):                       # x: (B, 2, RH, RW)
-        x = F.pad(x, (0, PAD_W - RW, 0, PAD_H - RH))
-        e1 = self.enc1(x)                       # 32x40
-        e2 = self.enc2(F.max_pool2d(e1, 2))     # 16x20
-        e3 = self.enc3(F.max_pool2d(e2, 2))     # 8x10
-        e4 = self.enc4(F.max_pool2d(e3, 2))     # 4x5
+    def forward(self, x):                       # x: (B, 2, H, W)
+        h, w = x.shape[-2:]
+        x = F.pad(x, (0, -w % 8, 0, -h % 8))    # pad to a multiple of 8 (32x40 for the 16x12 maps)
+        e1 = self.enc1(x)                       # full resolution
+        e2 = self.enc2(F.max_pool2d(e1, 2))     # 1/2
+        e3 = self.enc3(F.max_pool2d(e2, 2))     # 1/4
+        e4 = self.enc4(F.max_pool2d(e3, 2))     # 1/8
         d3 = self.dec3(torch.cat([self.up3(e4), e3], 1))
         d2 = self.dec2(torch.cat([self.up2(d3), e2], 1))
         d1 = self.dec1(torch.cat([self.up1(d2), e1], 1))
-        return self.head(d1)[:, 0, :RH, :RW]    # (B, RH, RW) logits
+        return self.head(d1)[:, 0, :h, :w]      # (B, H, W) logits
 
 
 def masked_bce(logits, Y, cand_mask, pos_weight):
@@ -72,7 +72,7 @@ def masked_bce(logits, Y, cand_mask, pos_weight):
 
 @torch.no_grad()
 def predict(model, X):
-    """X: (2, RH, RW) numpy → probability raster (RH, RW) numpy"""
+    """X: (2, H, W) numpy → probability raster (H, W) numpy"""
     model.eval()
     logits = model(torch.from_numpy(X[None]).float())
     return torch.sigmoid(logits)[0].numpy()

@@ -25,6 +25,7 @@ that number.
 | 4 | `refinement.ipynb` | `solvers.py` | Constraint generation: solve on a coarse grid of robot positions, verify on a fine grid, add violated points until none remain |
 | 5 | `analysis.ipynb` | — | Cost of requiring 3 beacons, where optimal beacons go, trimming the candidate set, and a 472-map study of what drives the beacon count |
 | 6 | `deep_learning.ipynb` | `dl_dataset.py`, `dl_model.py`, `dl_train.py`, `dl_eval.py` | A U-Net predicts a beacon heatmap from the map; the heatmap is decoded into valid layouts and compared with greedy and the ILP optimum |
+| 7 | `scaling.ipynb` | `dl_scale.py` | Maps up to 4× larger: the heatmap prunes the candidate set before the exact solver; speed vs. optimality against a simple type-based ranking |
 
 ## Key results
 
@@ -39,7 +40,11 @@ that number.
 - **The network learns the solver's preferences** (AUC 0.87, same ranking of position types). Hybrid decoding
   (greedy gain × network probability) comes within 1.7 beacons of the optimum on average and reaches it on 19% of test
   maps — significantly better than greedy (sign test p ≈ 2×10⁻⁶). At this map size, though, the exact pipeline
-  (about 1.3 s per map) remains the practical choice.
+  (about 0.8 s per map) remains the practical choice.
+- **On larger maps the network pays off as a pruning prior.** Caching and warm starts make the exact solver up to 1.9×
+  faster; on top of that, solving exactly over the network's top 45% of candidates is another 1.9× faster on maps with
+  4× the training area (54 s → 15 s per map overall) for about 1% more beacons — 2–3× fewer extra beacons than a
+  simple ranking by candidate type. The network's ranking (AUC ≈ 0.85) carries over to maps it was never trained on.
 
 ## Running
 
@@ -54,8 +59,9 @@ The data and model files are included, so the notebooks run without regenerating
 | `dl_data.npz` | 472 maps (seeds 0–471) with verified optimal layouts | `python dl_dataset.py --n 472` |
 | `dl_model.pt`, `dl_model_hist.npz` | Trained U-Net and its training curves | `python dl_train.py --epochs 30 --base 8` |
 | `dl_eval.npz` | Test-set evaluation | `python dl_eval.py` |
+| `dl_scale.npz` | Scaling experiment: 42 maps at three sizes, every method timed | `python dl_scale.py` (about 45 minutes) |
 
-`dl_dataset.py` and `dl_eval.py` resume from an existing output file, so delete it first to start from scratch.
+`dl_dataset.py`, `dl_eval.py` and `dl_scale.py` resume from an existing output file, so delete it first to start from scratch.
 
 ## Limitations
 
@@ -64,6 +70,7 @@ The data and model files are included, so the notebooks run without regenerating
 - Beacon candidates are limited to wall corners and segment midpoints.
 - CP-SAT runs with 8 workers, so re-running can return a different (equally optimal) layout; beacon counts are unaffected.
 - The deep-learning dataset is small (376 training maps), and the model starts to overfit after about 13 epochs.
+- Network-pruned solving is optimal only over the kept candidates; the full exact solver is still needed for a proven optimum.
 
 ## License
 

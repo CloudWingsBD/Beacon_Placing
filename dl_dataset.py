@@ -35,10 +35,11 @@ RH, RW = 2 * GRID_H + 1, 2 * GRID_W + 1        # raster size (rows = y, cols = x
 
 
 # ------------------------------------------------------------------ geometry → raster
-def map_params(seed):
-    """Derive the map's area and number of holes from the seed, for diversity and reproducibility"""
+def map_params(seed, scale=1.0):
+    """Derive the map's area and number of holes from the seed, for diversity and reproducibility.
+    scale multiplies both, for maps on a larger grid (scale = grid area / 16x12 area)."""
     rng = random.Random(seed * 7919 + 13)
-    return rng.randint(60, 130), rng.randint(4, 14)
+    return round(rng.randint(60, 130) * scale), round(rng.randint(4, 14) * scale)
 
 
 def unique_candidates(corners, mids):
@@ -71,6 +72,15 @@ def rasterize_free(cells, W=GRID_W, H=GRID_H):
     return R
 
 
+def rasterize_input(cells, cands, W=GRID_W, H=GRID_H):
+    """Network input for one map: (free-space field, candidate mask), shape (2, 2H+1, 2W+1)"""
+    X = np.zeros((2, 2 * H + 1, 2 * W + 1), dtype=np.float32)
+    X[0] = rasterize_free(cells, W, H)
+    for p in cands:
+        X[1][to_raster_index(p)] = 1.0
+    return X
+
+
 def build_sample(seed):
     """Generate one sample. Returns a dict, or None on failure"""
     try:
@@ -89,14 +99,10 @@ def _build_sample(seed):
     P_check = sample_points(cells, RES_CHECK)
     sol, log = constraint_generation(cands, cells, W1, W2, P_solve, P_check)
 
-    X = np.zeros((2, RH, RW), dtype=np.float32)
+    X = rasterize_input(cells, cands)
     Y = np.zeros((RH, RW), dtype=np.float32)
-    X[0] = rasterize_free(cells)
-    for j, p in enumerate(cands):
-        r, c = to_raster_index(p)
-        X[1, r, c] = 1.0
-        if j in set(sol):
-            Y[r, c] = 1.0
+    for j in sol:
+        Y[to_raster_index(cands[j])] = 1.0
     return {'seed': seed, 'X': X, 'Y': Y, 'n_beacons': len(sol),
             'area': len(cells), 'n_cand': len(cands), 'iters': len(log)}
 
